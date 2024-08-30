@@ -1,0 +1,89 @@
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+options(encoding = "UTF-8")
+```
+
+# Ejercicio 9
+
+Sea $\theta$ la probabilidad de que meta un penal, como es bastante probable de que Montiel acierte tomo como prior del modelo $\theta \sim Beta(10,2)$. 
+
+```{r}
+alpha <- 10
+beta <- 2
+
+# Valores de theta entre 0 y 1
+theta_vals <- seq(0, 1, length.out = 1000)
+
+prior <- dbeta(theta_vals, alpha, beta)
+
+# Grafico la función de densidad
+plot(theta_vals, prior, type = "l", col='blue', lwd = 2,
+     main = "Prior: Beta(10,2)",
+     xlab = expression(theta), ylab = expression(f(theta)))
+```
+Sea $X$ la cantidad de penales convertidos sobre los $12$ pateados, tenemos que $X \mid \theta \sim Bi(12, \theta)$. Como Montiel convirtió los 12 penales pateados, la likelihood del modelo es $L(\theta) = P(X=12 \mid \theta) = \theta^{12}$. Nos queda entonces $posterior \propto prior(\theta) \cdot L(theta)$ que normalizamos dividiendo por la suma.
+
+```{r}
+library(ggplot2)
+
+set.seed(1)
+
+N <- 1000
+n_tiros <- 12
+aciertos <- 12
+theta_grid <- seq(0, 1, length.out=N)
+
+prior <- dbeta(theta_grid, alpha, beta) # computo densidad en puntos sampleados
+likelihood <- dbinom(aciertos, n_tiros, theta_grid)
+posterior <- likelihood * prior
+posterior_normalizada <- posterior / sum(posterior)
+
+posterior_analitica <- dbeta(theta_grid, alpha+aciertos , beta + n_tiros - aciertos)
+
+data <- data.frame(theta=theta_grid, posterior=posterior_normalizada)
+
+ggplot(data, aes(x=theta, weight=posterior)) +
+  geom_histogram(bins = 50, fill = "lightblue", color = "black", alpha = 0.7) +
+  labs(title = "Posterior = Likelihood * Prior",
+       x = expression(theta),
+       y = "posterior") +
+  theme_minimal() + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+
+Simulaciones
+```{r}
+set.seed(1)
+
+N <- 10000
+
+# Sampleo valor de theta de la prior
+theta_samples <- rbeta(N, alpha, beta)
+
+# Simulo 12 penales
+penales <- rbinom(N, 12, theta_samples)
+
+# Me quedo con los que son todos conversiones
+posterior <- theta_samples[penales == 12]
+
+# Plot de la posterior
+hist(posterior, breaks = 50, probability = TRUE, col = "lightblue",
+     main = "Posterior para 12 conversiones",
+     xlab = expression(theta), ylab = expression(f(theta)))
+
+```
+
+
+```{r}
+```{r}
+# post_samples <- sample_n(data, size=10000, replace=TRUE, weight=posterior)
+# 
+# ggplot(post_samples, aes(x=theta)) + 
+#   geom_histogram(aes(y=..density..), fill='blue', color='white', alpha=0.5, binwidth=0.01) + 
+#   stat_function(fun = dbeta, args = list(22, 2), lwd=1) + 
+#   theme_minimal()
+```
+```
+
