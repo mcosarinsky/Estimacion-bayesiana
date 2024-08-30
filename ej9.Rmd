@@ -10,11 +10,13 @@ Sea $\theta$ la probabilidad de que meta un penal, como es bastante probable de 
 ```{r}
 alpha <- 10
 beta <- 2
+N <- 1000
 
 # Valores de theta entre 0 y 1
-theta_vals <- seq(0, 1, length.out = 1000)
+theta_vals <- seq(0, 1, length.out = N)
 
 prior <- dbeta(theta_vals, alpha, beta)
+prior <- prior/sum(prior)
 
 # Grafico la función de densidad
 plot(theta_vals, prior, type = "l", col='blue', lwd = 2,
@@ -28,7 +30,6 @@ library(ggplot2)
 
 set.seed(1)
 
-N <- 1000
 n_tiros <- 12
 aciertos <- 12
 theta_grid <- seq(0, 1, length.out=N)
@@ -38,7 +39,8 @@ likelihood <- dbinom(aciertos, n_tiros, theta_grid)
 posterior <- likelihood * prior
 posterior_normalizada <- posterior / sum(posterior)
 
-posterior_analitica <- dbeta(theta_grid, alpha+aciertos , beta + n_tiros - aciertos)
+
+posterior_analitico <- dbeta(theta_grid, alpha+aciertos , beta + n_tiros - aciertos)
 
 data <- data.frame(theta=theta_grid, posterior=posterior_normalizada)
 
@@ -53,37 +55,35 @@ ggplot(data, aes(x=theta, weight=posterior)) +
 ```
 
 
-Simulaciones
+
+```{r}
+library(dplyr)
+
+post_samples <- sample_n(data, size=10000, replace=TRUE, weight=posterior)
+
+ggplot(post_samples, aes(x=theta)) +
+  geom_histogram(aes(y=..density..), fill='blue', color='white', alpha=0.5, binwidth=0.01) +
+  stat_function(fun = dbeta, args = list(22, 2), lwd=1) +
+  theme_minimal()
+
+```
+
 ```{r}
 set.seed(1)
-
 N <- 10000
 
-# Sampleo valor de theta de la prior
-theta_samples <- rbeta(N, alpha, beta)
+theta_samples <- sample(theta_grid, size=N, replace=TRUE, prob=posterior_normalizada)
+resultados <- rbinom(N, 10, theta_samples)
+# resultados <- c()
+# for (i in 1:N) {
+#   resultados <- c(resultados, rbinom(1, 10, theta_samples[i]))
+# }
 
-# Simulo 12 penales
-penales <- rbinom(N, 12, theta_samples)
-
-# Me quedo con los que son todos conversiones
-posterior <- theta_samples[penales == 12]
-
-# Plot de la posterior
-hist(posterior, breaks = 50, probability = TRUE, col = "lightblue",
-     main = "Posterior para 12 conversiones",
-     xlab = expression(theta), ylab = expression(f(theta)))
-
-```
-
-
-```{r}
-```{r}
-# post_samples <- sample_n(data, size=10000, replace=TRUE, weight=posterior)
-# 
-# ggplot(post_samples, aes(x=theta)) + 
-#   geom_histogram(aes(y=..density..), fill='blue', color='white', alpha=0.5, binwidth=0.01) + 
-#   stat_function(fun = dbeta, args = list(22, 2), lwd=1) + 
-#   theme_minimal()
+hist(resultados, probability = T)
+mean(resultados >= 8)
 ```
 ```
+
+
+
 
