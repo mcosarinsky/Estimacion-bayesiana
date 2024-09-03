@@ -1,88 +1,109 @@
+---
+title: "Entrega ejercicio 9"
+date: "Fecha: 30/08/24"
+author: "Matias Cosarinsky"
+output:
+  pdf_document: default
+  html_document: default
+---
+
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
 options(encoding = "UTF-8")
 ```
 
-# Ejercicio 9
+Definimos $\theta$ la probabilidad de que meta un penal, como es bastante probable de que Montiel acierte tomo como prior del modelo $\theta \sim Beta(10,2)$. 
 
-Sea $\theta$ la probabilidad de que meta un penal, como es bastante probable de que Montiel acierte tomo como prior del modelo $\theta \sim Beta(10,2)$. 
+Sea $Y$ la cantidad de penales convertidos sobre los $12$ pateados, tenemos que $X \mid \theta \sim Bi(12, \theta)$. Como Montiel convirtió los 12 penales pateados, la likelihood del modelo es $L(\theta) = P(X=12 \mid \theta) = \theta^{12}$. Nos queda entonces $posterior \propto prior(\theta) \cdot L(theta)$.
+
+Normalizamos tanto el prior como la posterior dividiendo por la suma y graficamos para distintos valores de $\theta$ generados a partir de una grilla entre 0 y 1. 
+
 
 ```{r}
+library(ggplot2)
+library(dplyr)
+
 alpha <- 10
 beta <- 2
 N <- 1000
 
-# Valores de theta entre 0 y 1
-theta_vals <- seq(0, 1, length.out = N)
-
-prior <- dbeta(theta_vals, alpha, beta)
-prior <- prior/sum(prior)
-
-# Grafico la función de densidad
-plot(theta_vals, prior, type = "l", col='blue', lwd = 2,
-     main = "Prior: Beta(10,2)",
-     xlab = expression(theta), ylab = expression(f(theta)))
-```
-Sea $X$ la cantidad de penales convertidos sobre los $12$ pateados, tenemos que $X \mid \theta \sim Bi(12, \theta)$. Como Montiel convirtió los 12 penales pateados, la likelihood del modelo es $L(\theta) = P(X=12 \mid \theta) = \theta^{12}$. Nos queda entonces $posterior \propto prior(\theta) \cdot L(theta)$ que normalizamos dividiendo por la suma.
-
-```{r}
-library(ggplot2)
-
-set.seed(1)
-
 n_tiros <- 12
-aciertos <- 12
-theta_grid <- seq(0, 1, length.out=N)
+n_aciertos <- 12
 
-prior <- dbeta(theta_grid, alpha, beta) # computo densidad en puntos sampleados
-likelihood <- dbinom(aciertos, n_tiros, theta_grid)
+# Defino grilla de valores de theta entre 0 y 1
+theta_grid <- seq(0, 1, length.out = N)
+
+prior <- dbeta(theta_grid, alpha, beta)
+likelihood <- dbinom(n_aciertos, n_tiros, theta_grid)
 posterior <- likelihood * prior
-posterior_normalizada <- posterior / sum(posterior)
 
+prior_norm <- prior / sum(prior)
+posterior_norm <- posterior / sum(posterior)
 
-posterior_analitico <- dbeta(theta_grid, alpha+aciertos , beta + n_tiros - aciertos)
+data <- data.frame(
+  theta = theta_grid,
+  prior = prior_norm,
+  posterior = posterior_norm
+)
 
-data <- data.frame(theta=theta_grid, posterior=posterior_normalizada)
-
-ggplot(data, aes(x=theta, weight=posterior)) +
-  geom_histogram(bins = 50, fill = "lightblue", color = "black", alpha = 0.7) +
-  labs(title = "Posterior = Likelihood * Prior",
+# Grafico prior y posterior
+ggplot(data, aes(x = theta)) +
+  geom_line(aes(y = posterior, color = "Posterior"), linewidth = 1) +
+  geom_line(aes(y = prior, color = "Prior"), linewidth = 1) +
+  labs(title = expression("Prior y posterior normalizadas para distintos valores de" ~ theta),
        x = expression(theta),
-       y = "posterior") +
-  theme_minimal() + 
-  theme(plot.title = element_text(hjust = 0.5))
+       y = expression(f(theta))) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.title = element_blank(),
+        legend.position = c(0.15, 0.9))
 
 ```
 
-
+\newpage
+Analíticamente obtenemos que la posterior se distribuye como una $Beta(22,2)$, pues reemplazando nuestro prior y la likelihood vemos que $posterior \propto \theta^{12}\cdot \theta^9 (1-\theta)$ que justamente es una $Beta(22,2)$ salvo una constante (necesaria para integrar 1). \newline 
+Para ver que la posterior obtenida numéricamente sigue esta misma distribución, muestreamos múltiples valores de $\theta$ de nuestra grilla pesando las muestras mediante la posterior obtenida y luego graficamos en un histograma.  
 
 ```{r}
 library(dplyr)
 
-post_samples <- sample_n(data, size=10000, replace=TRUE, weight=posterior)
+num_samples <- 10000
+theta_samples <- sample(data$theta, size = num_samples, prob = data$posterior, replace = TRUE)
 
-ggplot(post_samples, aes(x=theta)) +
+ggplot(data.frame(x=theta_samples), aes(x=x)) +
   geom_histogram(aes(y=..density..), fill='blue', color='white', alpha=0.5, binwidth=0.01) +
-  stat_function(fun = dbeta, args = list(22, 2), lwd=1) +
-  theme_minimal()
+  stat_function(fun = dbeta, args = list(22, 2), lwd=1, aes(linetype = "Distribución analítica")) +
+  labs(title = expression("Histograma de valores de" ~ theta ~ "según la distribución posterior"),
+       x = expression(theta),
+       y = "Densidad") + 
+  scale_linetype_manual(values = "solid") +
+  theme_minimal() + 
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.title = element_blank(),
+        legend.position = c(0.15, 0.9),
+        legend.text = element_text(size = 12))
 
 ```
+\newpage
+
+Por último vemos en un histograma la posterior predictive para los próximos 10 penales. Para ello simulamos 10000 tandas de 10 penales donde la probabilidad de conversión $\theta$ de cada tanda es muestreada de la posterior. 
 
 ```{r}
 set.seed(1)
 N <- 10000
 
-theta_samples <- sample(theta_grid, size=N, replace=TRUE, prob=posterior_normalizada)
+theta_samples <- sample(theta_grid, size=N, replace=TRUE, prob=posterior_norm)
 resultados <- rbinom(N, 10, theta_samples)
-# resultados <- c()
-# for (i in 1:N) {
-#   resultados <- c(resultados, rbinom(1, 10, theta_samples[i]))
-# }
 
-hist(resultados, probability = T)
-mean(resultados >= 8)
+
+hist(resultados, probability = T, main="Posterior predictive para próximos 10 penales",
+     xlab="Cantidad de penales convertidos", ylab="Frecuencia relativa")
+
+print(paste("Probabilidad estimada de convertir 8 o más penales:", mean(resultados >= 8)))
 ```
-```
+A partir de la simulación podemos estimar fácilmente la probabilidad de que convierta 8 o más de los próximos 10 penales, viendo la proporción de veces que ocurrió esto en las 10000 tandas de penales. La probabilidad obtenida es aproximadamente 0.93. \newline
+El mismo enfoque se puede aplicar para estimar la probabilidad de que convierta el penal número 13, lo que nos da aproximadamente 0.92, mientras que siguiendo un enfoque frecuentista sería de 1.0, ya que acertó los primeros 12 penales.
+
 
 
 
