@@ -12,11 +12,11 @@ knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
 options(encoding = "UTF-8")
 ```
 
-Definimos $\theta$ la probabilidad de que meta un penal, como es bastante probable de que Montiel acierte tomo como prior del modelo $\theta \sim Beta(10,2)$. 
+Asumimos que los penales pateados por Montiel son independiente y definimos $\theta$ la probabilidad de que meta un penal. Como es bastante probable de que Montiel acierte tomo como prior del modelo $\theta \sim Beta(10,2)$. 
 
-Sea $Y$ la cantidad de penales convertidos sobre los $12$ pateados, tenemos que $X \mid \theta \sim Bi(12, \theta)$. Como Montiel convirtió los 12 penales pateados, la likelihood del modelo es $L(\theta) = P(X=12 \mid \theta) = \theta^{12}$. Nos queda entonces $posterior \propto prior(\theta) \cdot L(theta)$.
+Sea $Y$ la cantidad de penales convertidos sobre los $12$ pateados, tenemos que $Y \mid \theta \sim Bi(12, \theta)$. Como Montiel convirtió los 12 penales pateados, la likelihood del modelo es $L(\theta) = P(Y=12 \mid \theta) = \theta^{12}$. Calculamos de esta forma $posterior \propto prior \cdot likelihood$.
 
-Normalizamos tanto el prior como la posterior dividiendo por la suma y graficamos para distintos valores de $\theta$ generados a partir de una grilla entre 0 y 1. 
+Normalizamos tanto el prior como la posterior dividiendo por la suma y graficamos para distintos valores de $\theta$ generados a partir de una grilla de 1000 valores entre 0 y 1. 
 
 
 ```{r}
@@ -61,7 +61,7 @@ ggplot(data, aes(x = theta)) +
 ```
 
 \newpage
-Analíticamente obtenemos que la posterior se distribuye como una $Beta(22,2)$, pues reemplazando nuestro prior y la likelihood vemos que $posterior \propto \theta^{12}\cdot \theta^9 (1-\theta)$ que justamente es una $Beta(22,2)$ salvo una constante (necesaria para integrar 1). \newline 
+Analíticamente obtenemos que la posterior se distribuye como una $Beta(22,2)$, pues reemplazando nuestro prior y la likelihood vemos que $f(\theta \mid y) \propto \theta^{12}\cdot \theta^9 (1-\theta)$ que justamente es una $Beta(22,2)$ salvo una constante (necesaria para integrar 1). Siendo $f(\theta \mid y)$ la posterior. \newline 
 Para ver que la posterior obtenida numéricamente sigue esta misma distribución, muestreamos múltiples valores de $\theta$ de nuestra grilla pesando las muestras mediante la posterior obtenida y luego graficamos en un histograma.  
 
 ```{r}
