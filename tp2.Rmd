@@ -1,0 +1,585 @@
+---
+title: "Entrega 2"
+author: "Matias Cosarinsky"
+output:
+  pdf_document: default
+  html_document: default
+date: "Fecha: 26/09/24"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.align = 'center')
+options(encoding = "UTF-8")
+
+library(ggplot2)
+library(dplyr)
+library(brms)
+library(bayesplot)
+library(fdrtool)
+library(gridExtra)
+```
+# Ejercicio 1
+Las variables aleatorias geométricas se usan para modelar la cantidad de intentos necesarios hasta que se produzca el primer fracaso en una serie de eventos independientes, donde cada intento tiene solo dos posibles resultados: éxito o fracaso (Bernoulli).  
+Por ejemplo si definimos $\theta$ como la probabilidad de que Montiel erre un penal, podemos modelar la cantidad de penales que patea hasta que falla por primera vez como $Y \sim \mathcal{G}(\theta)$.
+
+Tenemos que $P(\theta \mid Y=y) \propto L(\theta) \cdot prior(\theta)$, donde $L(\theta) = P(Y=y \mid \theta) = \theta(1-\theta)^{y-1}$ y  
+$prior(\theta) \propto \theta^{a-1}(1-\theta)^{b-1}$. Por lo tanto nos queda que la posterior $P(\theta \mid Y=y) \propto \theta^a(1-\theta)^{y+b-2}$. Es decir que la posterior es proporcional a una $Beta(a+1, b+y-1)$, lo que indica que el prior Beta es conjugado de la geométrica.
+
+# Ejercicio 2
+Buscamos determinar la esperanza de vida de las personas $Y_i$ en función a la cantidad de años de educación que tuvieron. Para que el intercept del modelo sea fácilmente interpretable, definimos $X_i' = \text{años de educación}$ y trabajamos con la variable $X_i = X_i' - 12$
+```{r}
+data <- read.csv('Life Expectancy Data.csv')
+data <- na.omit(data[, c("Schooling", "Life.expectancy")])
+
+X <- data$Schooling - 12
+Y <- data$Life.expectancy
+```
+
+
+Usamos entonces los siguientes priors:
+
+Para $\beta_0$ una normal $\mathcal{N}(70, 15^2)$. Como fue`centrada la variable $X_i$ esto sugiere que para una persona con primario y secundario completo su esperanza de vida es de 70 años con un desvío de 15.
+
+Para $\beta_1$ tomo como prior $\mathcal{N}(1, 4)$, esperando que por cada año de educación la esperanza de vida aumente 1 año. Por último tomo $\sigma \sim \mathcal{N}^+(0, 25)$.
+
+Como tenemos que $Y_i \sim \mathcal{N}(\mu(x_i), \sigma^2)$, donde $\mu(x_i) = \beta_0 + \beta_1 x_i$, nos queda entonces la siguiente likelihood: $P(Y_i \mid X_i, \ \beta_0, \ \beta_1, \ \sigma) = \displaystyle \prod_{k=1}^n f(y_i) = \displaystyle \prod_{k=1}^n \frac{1}{\sqrt{2\pi\sigma^2}}e^{-\frac{(Y_i - \mu(x_i))^2}{2\sigma^2}} = (2\pi\sigma^2)^{-\frac{n}{2}} e^{-\frac{1}{2\sigma^2}\displaystyle \sum_{i=1}^n (Y_i - \beta_0 - \beta_1 x_i)^2}$. \newpage
+
+
+**Implementación**:
+```{r}
+log_prior_beta0 <- function(x) dnorm(x, mean = 70, sd = 15, log = T)
+log_prior_beta1 <- function(x) dnorm(x, mean = 1, sd = 2, log = T)
+log_prior_sigma <- function(x) dhalfnorm(x, theta = sqrt(pi/2)/5, log = T) # theta = sqrt(pi / 2) / sigma
+
+log_prior <- function(x) log_prior_beta0(x[1]) + log_prior_beta1(x[2]) + log_prior_sigma(x[3])
+
+log_likelihood <- function(params, X, Y) {
+  beta0 <- params[1]
+  beta1 <- params[2]
+  sigma <- params[3]
+  
+  mu <- beta0 + beta1 * X
+  log_lik <- sum(dnorm(Y, mean = mu, sd = sigma, log = TRUE))
+  
+  return(log_lik)
+}
+
+log_posterior <- function(params, X, Y) {
+  log_p <- log_prior(params)
+  log_l <- log_likelihood(params, X, Y)
+  
+  # Log-posterior = log-likelihood + log-prior
+  log_post <- log_p + log_l
+  
+  return(log_post)
+}
+```
+
+
+
+```{r}
+# Uso distribución normal para generar la siguiente propuesta
+next_proposal <- function(params, scale) {
+  proposed <- rnorm(3, mean = params, sd = scale)
+  proposed[3] <- abs(proposed[3]) # Aseguro que sigma sea positivo
+  return(proposed)
+}
+
+accept_log <- function(log_post_0, log_post_1) {
+  if (log_post_1 >= log_post_0) {
+    return(TRUE)
+  } else if (log(runif(1)) < (log_post_1 - log_post_0)) {
+    return(TRUE)
+  } else {
+    return(FALSE)
+  }
+}
+
+# Algoritmo Metropolis-Hastings
+mcmc <- function(params, X, Y, iterations = 5000, burn_in = 2000, scale = 0.2) {
+  chain <- matrix(NA, nrow = iterations, ncol = 3)  # Cadena para cada parámetro
+  log_post_0 <- log_posterior(params, X, Y)  # Valor inicial de log posterior
+  
+  for (i in 1:iterations) {
+    # Proponemos siguiente valor y calculamos su log posterior
+    params_proposed <- next_proposal(params, scale = scale)  
+    log_post_1 <- log_posterior(params_proposed, X, Y)  
+    
+    # Si aceptamos actualizamos los parámetros
+    if (accept_log(log_post_0, log_post_1)) {
+      params <- params_proposed
+      log_post_0 <- log_post_1
+    }
+    
+    chain[i, ] <- params  # Guardamos parámetros actuales en la cadena
+  }
+  
+  # Devolvemos la cadena descartando el período burn_in
+  return(chain[(burn_in + 1):iterations, ])
+}
+```
+
+
+```{r}
+# Elegimos valores iniciales sampleando al azar de los priors que elegimos
+set.seed(1)
+
+generate_initial_params <- function() {
+  beta0_init <- rnorm(1, mean = 70, sd = 15)
+  beta1_init <- rnorm(1, mean = 1, sd = 2)
+  sigma_init <- rhalfnorm(1, theta = sqrt(pi / 2) / 5)
+  return(c(beta0_init, beta1_init, sigma_init))
+}
+
+initial_params <- generate_initial_params()
+
+iterations <- 5000  # Cantidad de iteraciones
+burn_in <- 0  # Iteraciones burn-in (a descartar)
+scale <- 0.05  # sd para el proposal
+
+# Corremos MCMC
+chain <- mcmc(initial_params, X, Y, iterations = iterations, burn_in = burn_in, scale = scale)
+chain_df <- as.data.frame(chain)
+colnames(chain_df) <- c("beta_0", "beta_1", "sigma") 
+
+```
+
+\newpage
+Graficamos las 3 cadenas obtenidas:
+```{r, fig.height=6, fig.width=6, echo=FALSE} 
+
+plot_beta_0 <- ggplot(chain_df, aes(x = 1:nrow(chain_df), y = beta_0)) +
+  geom_line() +
+  labs(title = expression(paste("Cadena ", beta[0])),
+       x = "Iteración",
+       y = expression(beta[0])) +
+  scale_x_continuous(breaks = seq(0, nrow(chain_df), by = 500)) +  # Set x breaks
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+plot_beta_1 <- ggplot(chain_df, aes(x = 1:nrow(chain_df), y = beta_1)) +
+  geom_line() +
+  labs(title = expression(paste("Cadena ", beta[1])),
+       x = "Iteración",
+       y = expression(beta[1])) +
+  scale_x_continuous(breaks = seq(0, nrow(chain_df), by = 500)) +  # Set x breaks
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+plot_sigma <- ggplot(chain_df, aes(x = 1:nrow(chain_df), y = sigma)) +
+  geom_line() +
+  labs(title = expression(paste("Cadena ", sigma)),
+       x = "Iteración",
+       y = expression(sigma)) +
+  scale_x_continuous(breaks = seq(0, nrow(chain_df), by = 500)) +  # Set x breaks
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+grid.arrange(plot_beta_0, plot_beta_1, plot_sigma, nrow = 3)
+
+```
+Vemos que todas ellas parecen haber convergido, aunque los valores iniciales no son buenos, en particular para el caso de $\beta_0$. Esto se podría solucionar si usamos un burn-in mayor a cero, descartando así las primeras iteraciones.
+
+
+```{r, fig.height=8, fig.width=6, echo=FALSE, eval=FALSE} 
+#Si graficamos la distribución de las posteriors obtenidas, podemos ver que se asemejan a una normal.
+density_beta_0 <- ggplot(chain_df, aes(x = beta_0)) +
+  geom_density(fill = "blue", alpha = 0.5) +
+  labs(title = expression(paste("Gráfico de Densidad para ", beta[0])),
+       x = expression(beta[0]), 
+       y = "Densidad") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+density_beta_1 <- ggplot(chain_df, aes(x = beta_1)) +
+  geom_density(fill = "green", alpha = 0.5) +
+  labs(title = expression(paste("Gráfico de Densidad para ", beta[1])),
+       x = expression(beta[1]), 
+       y = "Densidad") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+density_sigma <- ggplot(chain_df, aes(x = sigma)) +
+  geom_density(fill = "red", alpha = 0.5) +
+  labs(title = expression(paste("Gráfico de Densidad para ", sigma)),
+       x = expression(sigma), 
+       y = "Densidad") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+grid.arrange(density_beta_0, density_beta_1, density_sigma, nrow = 3)
+
+```
+
+
+
+Repetimos el proceso pero esta vez para 3 cadenas en paralelo
+```{r}
+set.seed(1)
+n_chains <- 3
+initial_params_list <- replicate(n_chains, generate_initial_params(), simplify = FALSE)
+chains <- list()
+
+for (i in seq_along(initial_params_list)) {
+  initial_params <- initial_params_list[[i]]
+  chain <- mcmc(initial_params, X, Y, iterations = iterations, burn_in = burn_in, scale = scale)
+  chains[[i]] <- as.data.frame(chain)
+  colnames(chains[[i]]) <- c("beta_0", "beta_1", "sigma")
+}
+```
+
+
+```{r, fig.height=6, fig.width=6, echo=FALSE} 
+chain_df_1 <- chains[[1]]
+chain_df_2 <- chains[[2]]
+chain_df_3 <- chains[[3]]
+
+cols <- colorRampPalette(c("lightblue", "darkblue"))
+blue_shades <- cols(3)
+
+plot_beta_0 <- ggplot() +
+  geom_line(data = chain_df_1, aes(x = 1:nrow(chain_df_1), y = beta_0, color = "Cadena 1")) + 
+  geom_line(data = chain_df_2, aes(x = 1:nrow(chain_df_2), y = beta_0, color = "Cadena 2")) + 
+  geom_line(data = chain_df_3, aes(x = 1:nrow(chain_df_3), y = beta_0, color = "Cadena 3")) +  
+  labs(title = expression(paste("Cadenas obtenidas para ", beta[0])),
+       x = "Iteración",
+       y = expression(beta[0]),
+       color = "") +
+  scale_color_manual(values = blue_shades) +
+  scale_x_continuous(breaks = seq(0, nrow(chain_df_1), by = 500)) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+plot_beta_1 <- ggplot() +
+  geom_line(data = chain_df_1, aes(x = 1:nrow(chain_df_1), y = beta_1, color = "Cadena 1")) + 
+  geom_line(data = chain_df_2, aes(x = 1:nrow(chain_df_2), y = beta_1, color = "Cadena 2")) + 
+  geom_line(data = chain_df_3, aes(x = 1:nrow(chain_df_3), y = beta_1, color = "Cadena 3")) +  
+  labs(title = expression(paste("Cadenas obtenidas para ", beta[1])),
+       x = "Iteración",
+       y = expression(beta[1]),
+       color = "") +
+  scale_color_manual(values = blue_shades) +
+  scale_x_continuous(breaks = seq(0, nrow(chain_df_1), by = 500)) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+plot_sigma <- ggplot() +
+  geom_line(data = chain_df_1, aes(x = 1:nrow(chain_df_1), y = sigma, color = "Cadena 1")) + 
+  geom_line(data = chain_df_2, aes(x = 1:nrow(chain_df_2), y = sigma, color = "Cadena 2")) +  
+  geom_line(data = chain_df_3, aes(x = 1:nrow(chain_df_3), y = sigma, color = "Cadena 3")) +  
+  labs(title = expression(paste("Cadenas obtenidas para ", sigma)),
+       x = "Iteración",
+       y = expression(sigma),
+       color = "") +
+  scale_color_manual(values = blue_shades) +
+  scale_x_continuous(breaks = seq(0, nrow(chain_df_1), by = 500)) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+grid.arrange(plot_beta_0, plot_beta_1, plot_sigma, nrow = 3)
+```
+Vemos que en todos los casos las cadenas graficadas se entremezclan entre sí y convergen aproximadamente luego de unas 1750 iteraciones. Los valores iniciales de $\beta_0$ y $\sigma$ están muy lejos del ideal principalmente en el caso de la 2da cadena lo que hace parecer que las 3 cadenas convergen a una recta. Si repetimos el mismo gráfico ignorando las primeras 1750 iteraciones (aplicando un burn-in) podemos ver que en realidad hay ruido. 
+
+
+```{r, fig.height=6, fig.width=6, echo=FALSE} 
+
+burn_in <- 1750
+chain_df_1_burned <- chain_df_1[-(1:burn_in), ]
+chain_df_2_burned <- chain_df_2[-(1:burn_in), ]
+chain_df_3_burned <- chain_df_3[-(1:burn_in), ]
+
+cols <- colorRampPalette(c("lightblue", "darkblue"))
+blue_shades <- cols(3)
+
+plot_beta_0 <- ggplot() +
+  geom_line(data = chain_df_1_burned, aes(x = 1:nrow(chain_df_1_burned), y = beta_0, color = "Cadena 1")) + 
+  geom_line(data = chain_df_2_burned, aes(x = 1:nrow(chain_df_2_burned), y = beta_0, color = "Cadena 2")) + 
+  geom_line(data = chain_df_3_burned, aes(x = 1:nrow(chain_df_3_burned), y = beta_0, color = "Cadena 3")) +  
+  labs(title = expression(paste("Cadenas obtenidas para ", beta[0])),
+       x = "Iteración",
+       y = expression(beta[0]),
+       color = "") +
+  scale_color_manual(values = blue_shades) +
+  scale_x_continuous(breaks = seq(0, nrow(chain_df_1_burned), by = 500), 
+                     labels = seq(burn_in, burn_in + nrow(chain_df_1_burned) - 1, by = 500)) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+plot_beta_1 <- ggplot() +
+  geom_line(data = chain_df_1_burned, aes(x = 1:nrow(chain_df_1_burned), y = beta_1, color = "Cadena 1")) + 
+  geom_line(data = chain_df_2_burned, aes(x = 1:nrow(chain_df_2_burned), y = beta_1, color = "Cadena 2")) + 
+  geom_line(data = chain_df_3_burned, aes(x = 1:nrow(chain_df_3_burned), y = beta_1, color = "Cadena 3")) +  
+  labs(title = expression(paste("Cadenas obtenidas para ", beta[1])),
+       x = "Iteración",
+       y = expression(beta[1]),
+       color = "") +
+  scale_color_manual(values = blue_shades) +
+  scale_x_continuous(breaks = seq(0, nrow(chain_df_1_burned), by = 500), 
+                     labels = seq(burn_in, burn_in + nrow(chain_df_1_burned) - 1, by = 500)) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+plot_sigma <- ggplot() +
+  geom_line(data = chain_df_1_burned, aes(x = 1:nrow(chain_df_1_burned), y = sigma, color = "Cadena 1")) + 
+  geom_line(data = chain_df_2_burned, aes(x = 1:nrow(chain_df_2_burned), y = sigma, color = "Cadena 2")) +  
+  geom_line(data = chain_df_3_burned, aes(x = 1:nrow(chain_df_3_burned), y = sigma, color = "Cadena 3")) +  
+  labs(title = expression(paste("Cadenas obtenidas para ", sigma)),
+       x = "Iteración",
+       y = expression(sigma),
+       color = "") +
+  scale_color_manual(values = blue_shades) +
+  scale_x_continuous(breaks = seq(0, nrow(chain_df_1_burned), by = 500), 
+                     labels = seq(burn_in, burn_in + nrow(chain_df_1_burned) - 1, by = 500)) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+# Arrange plots
+grid.arrange(plot_beta_0, plot_beta_1, plot_sigma, nrow = 3)
+```
+\newpage
+Podemos ver también en el siguiente gráfico que se superponen bastante las distribuciones estimadas mediante las 3 cadenas y que se asemejan a una normal.
+
+```{r, fig.height=6, fig.width=6, echo=FALSE} 
+plot_beta_0 <- ggplot() +
+  geom_density(data = chain_df_1_burned, aes(x = beta_0, color = "Cadena 1"), size = 1) + 
+  geom_density(data = chain_df_2_burned, aes(x = beta_0, color = "Cadena 2"), size = 1) + 
+  geom_density(data = chain_df_3_burned, aes(x = beta_0, color = "Cadena 3"), size = 1) +  
+  labs(title = expression(paste("Densidad estimada para ", beta[0])),
+       x = expression(beta[0]),
+       y = "Densidad",
+       color = "") +
+  scale_color_manual(values = blue_shades) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+plot_beta_1 <- ggplot() +
+  geom_density(data = chain_df_1_burned, aes(x = beta_1, color = "Cadena 1"), size = 1) + 
+  geom_density(data = chain_df_2_burned, aes(x = beta_1, color = "Cadena 2"), size = 1) + 
+  geom_density(data = chain_df_3_burned, aes(x = beta_1, color = "Cadena 3"), size = 1) +  
+  labs(title = expression(paste("Densidad estimada para ", beta[1])),
+       x = expression(beta[1]),
+       y = "Densidad",
+       color = "") +
+  scale_color_manual(values = blue_shades) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+plot_sigma <- ggplot() +
+  geom_density(data = chain_df_1_burned, aes(x = sigma, color = "Cadena 1"), size = 1) + 
+  geom_density(data = chain_df_2_burned, aes(x = sigma, color = "Cadena 2"), size = 1) +  
+  geom_density(data = chain_df_3_burned, aes(x = sigma, color = "Cadena 3"), size = 1) +  
+  labs(title = expression(paste("Densidad estimada para ", sigma)),
+       x = expression(sigma),
+       y = "Densidad",
+       color = "") +
+  scale_color_manual(values = blue_shades) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+# Arrange plots
+grid.arrange(plot_beta_0, plot_beta_1, plot_sigma, nrow = 3)
+```
+
+\newpage
+Tomamos ahora 100 muestras del posterior y ajustamos con ellas 100 rectas sobre nuestros datos.
+Para ello elegimos 100 indices al azar (a partir de la iteración 2000 cuando ya estamos seguros de que convirgieron todas las cadenas) y nos quedamos con los valores de los parámetros en dichos índices. 
+
+```{r}
+set.seed(1)
+
+n_burn <- 2000
+n_samples <- 100
+
+chain_df_1_burned <- chain_df_1[-(1:n_burn), ]
+chain_df_2_burned <- chain_df_2[-(1:n_burn), ]
+chain_df_3_burned <- chain_df_3[-(1:n_burn), ]
+
+# Combinamos las cadenas para que las muestras sampleadas no sean todas de la misma
+combined_chains <- rbind(chain_df_1_burned, chain_df_2_burned, chain_df_3_burned)
+
+sample_indices <- sample(1:nrow(combined_chains), n_samples)
+posterior_samples <- combined_chains[sample_indices, ]
+
+# Generamos las rectas obtenidas para cada una de las muestras
+pred_Y_list <- lapply(1:n_samples, function(i) {
+  beta_0 <- posterior_samples$beta_0[i]
+  beta_1 <- posterior_samples$beta_1[i]
+
+  # Calculate predicted Y values for the given beta_0 and beta_1
+  pred_Y <- beta_0 + beta_1 * X
+
+  return(pred_Y)
+})
+
+
+pred_Y_df <- do.call(cbind, pred_Y_list)
+pred_Y_flat <- data.frame(X = rep(X, times = n_samples),
+                          Y = as.vector(pred_Y_df),
+                          n_recta = rep(1:n_samples, each = length(X)))
+
+ggplot(data = data.frame(X, Y), aes(x = X, y = Y)) +
+  geom_point(color = "black") +  
+  geom_line(data = pred_Y_flat, aes(x = X, y = Y, group = n_recta), 
+            color = "blue", alpha = 0.1) +  # 100 predicted lines
+  labs(title = "100 rectas ajustadas a partir de muestras de la posterior",
+       x = "Años de educación (centrados)",
+       y = "Esperanza de vida") +
+  theme_minimal() + 
+  theme(plot.title = element_text(hjust = 0.5)) 
+```
+Observamos que las rectas son muy similares entre sí, lo que dificulta notar que hay 100 de ellas. Además, se ajustan relativamente bien a los datos, a pesar de las limitaciones de nuestro modelo, ya que hay una considerable varianza debido a otras variables que influyen en la esperanza de vida, que no estaríamos considerando.
+
+\newpage
+Utilizando la distribución posterior obtenida al combinar las tres cadenas, buscamos estimar la esperanza de vida para personas con niveles extremos de educación, es decir, aquellas con 0 o 20 años de educación, y generamos intervalos de credibilidad del 95% para los valores estimados. Para esto, tomamos el intervalo comprendido entre el percentil 2,5 y el percentil 97,5 de la posterior predictive.
+```{r}
+generate_posterior_predictive <- function(school_years, chains) {
+  X <- school_years - 12
+  mu_samples <- chains$beta_0 + chains$beta_1 * X
+  
+  # Genero predicciones para cada muestra
+  Y_pred_samples <- rnorm(nrow(chains), mean = mu_samples, sd = chains$sigma)
+  
+  return(Y_pred_samples)
+}
+
+pred_0 <- generate_posterior_predictive(0, combined_chains) # Esperanza de vida para 0 años de educación
+pred_20 <- generate_posterior_predictive(20, combined_chains) # Esperanza de vida para 20 años de educación
+
+ci_0 <- quantile(pred_0, probs = c(0.025, 0.975)) %>% round(1)
+ci_20 <- quantile(pred_20, probs = c(0.025, 0.975)) %>% round(1)
+
+mean_pred_0 <- mean(pred_0) %>% round(1) 
+mean_pred_20 <- mean(pred_20) %>% round(1)
+```
+
+Imprimimos los valores obtenidos:
+```{r, echo=FALSE}
+cat("Intervalo de credibilidad del 95% para la esperanza de vida con 0 años de educación: [", 
+    ci_0[1]%>% format(nsmall = 1), ", ", ci_0[2]%>% format(nsmall = 1), "]", "\n", 
+    "Esperanza de vida promedio: ", mean_pred_0 %>% format(nsmall = 1), "\n", sep = "")
+
+# Print credible intervals and means for 20 years of education
+cat("Intervalo de credibilidad del 95% para la esperanza de vida con 20 años de educación: [", 
+    ci_20[1] %>% format(nsmall = 1) , ", ", ci_20[2] %>% format(nsmall = 1), "]", "\n", 
+    "Esperanza de vida promedio: ", mean_pred_20 %>% format(nsmall = 1), "\n", sep = "")
+```
+
+
+# Ejercicio 3
+
+Repetimos el mismo análisis utilizando ahora el paquete `brms`. Usamos un burn-in de 2000 y realizamos 5000 iteraciones del algoritmo manteniendo los mismos priors.
+```{r, results = 'hide'}
+priors <- c(
+  prior(normal(70, 15), class = "Intercept"), # Prior para beta_0
+  prior(normal(1, 2), class = "b"),           # Prior para beta_1
+  prior(normal(1, 5), class = "sigma", lb = 0) # Prior para sigma (cota inferior es 0)
+)
+
+data_brms <- data.frame(X = data$Schooling - 12, Y = data$Life.expectancy)
+
+fit_brms <- brm(
+  formula = Y ~ X,        
+  data = data_brms,       
+  prior = priors,          
+  iter = 5000,             
+  warmup = 2000,          
+  chains = 3,              
+  seed = 1
+)
+summary(fit_brms)
+```
+
+```{r, fig.height=6, fig.width=6}
+posterior_samples_brms <- as_draws_df(fit_brms)
+mcmc_trace(posterior_samples_brms, 
+           pars = c("b_Intercept", "b_X", "sigma"),  # Parameters to plot
+           facet_args = list(ncol = 1),  # Stack the plots vertically
+           color = "chain")  # Color by chain
+```
+
+Como podemos ver, las cadenas convergen en los 3 casos.
+\newpage
+Veamos que los posteriors de cada parámetro calculados mediante `brms` coinciden con los de nuestra implementación:
+
+```{r, echo=FALSE, fig.height=6, fig.width=6}
+combined_data <- data.frame(
+  beta_0_custom = combined_chains$beta_0,
+  beta_1_custom = combined_chains$beta_1,
+  sigma_custom = combined_chains$sigma,
+  beta_0_brms = posterior_samples_brms$b_Intercept,
+  beta_1_brms = posterior_samples_brms$b_X,
+  sigma_brms = posterior_samples_brms$sigma
+)
+
+plot_beta_0 <- ggplot() +
+  geom_density(aes(x = combined_data$beta_0_custom, color = "Implementación propia"), size = 1) +
+  geom_density(aes(x = combined_data$beta_0_brms, color = "brms"), size = 1) +
+  labs(title = expression(paste("Densidades estimadas por ámbos métodos para ", beta[0])),
+       x = expression(beta[0]),
+       y = "Densidad",
+       color = "") +
+  scale_color_manual(values = c("Implementación propia" = "red", "brms" = "blue")) +
+  theme_minimal() + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+plot_beta_1 <- ggplot() +
+  geom_density(aes(x = combined_data$beta_1_custom, color = "Implementación propia"), size = 1) +
+  geom_density(aes(x = combined_data$beta_1_brms, color = "brms"), size = 1) +
+  labs(title = expression(paste("Densidades estimadas por ámbos métodos para ", beta[1])),
+       x = expression(beta[1]),
+       y = "Densidad",
+       color = "") +
+  scale_color_manual(values = c("Implementación propia" = "red", "brms" = "blue")) +
+  theme_minimal() + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+plot_sigma <- ggplot() +
+  geom_density(aes(x = combined_data$sigma_custom, color = "Implementación propia"), size = 1) +
+  geom_density(aes(x = combined_data$sigma_brms, color = "brms"), size = 1) +
+  labs(title = expression(paste("Densidades estimadas por ámbos métodos para ", sigma)),
+       x = expression(sigma),
+       y = "Densidad",
+       color = "") +
+  scale_color_manual(values = c("Implementación propia" = "red", "brms" = "blue")) +
+  theme_minimal() + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+grid.arrange(plot_beta_0, plot_beta_1, plot_sigma, nrow = 3)
+```
+Las distribuciones de las posteriors obtenidas mediante ambas implementaciones de MCMC son muy parecidas en todos los casos. En el caso de `brms` las curvas son algo más suaves, ya sea por una mejor elección del siguiente paso de muestreo en cada iteración del algoritmo o por algún otro tipo de procesamiento interno que aplica la librería.
+
+\newpage
+Por último, usamos el posterior predictive para repetir las estimaciones de la esperanza de vida para gente con 0 y 20 años de educación.
+```{r}
+generate_posterior_predictive_brms <- function(school_years, chains) {
+  X <- school_years - 12
+  mu_samples <- chains$b_Intercept + chains$b_X * X
+  
+  Y_pred_samples <- rnorm(nrow(chains), mean = mu_samples, sd = chains$sigma)
+  
+  return(Y_pred_samples)
+}
+
+# Predicciones para 0 y 20 años de educación a partir de resultados de brms
+pred_0_brms <- generate_posterior_predictive_brms(0, posterior_samples_brms)
+pred_20_brms <- generate_posterior_predictive_brms(20, posterior_samples_brms)
+
+# Intervalos del 95%
+ci_0_brms <- quantile(pred_0_brms, probs = c(0.025, 0.975)) %>% round(1)
+ci_20_brms <- quantile(pred_20_brms, probs = c(0.025, 0.975)) %>% round(1)
+
+mean_pred_0_brms <- mean(pred_0_brms) %>% round(1)
+mean_pred_20_brms <- mean(pred_20_brms) %>% round(1)
+```
+
+
+```{r, echo=FALSE}
+cat("Intervalo de credibilidad del 95% para la esperanza de vida con 0 años de educación: [", 
+    ci_0_brms[1] %>% format(nsmall = 1), ", ", ci_0_brms[2] %>% format(nsmall = 1), "]", "\n", 
+    "Esperanza de vida promedio: ", mean_pred_0_brms %>% format(nsmall = 1), "\n", sep = "")
+
+cat("Intervalo de credibilidad del 95% para la esperanza de vida con 20 años de educación: [", 
+    ci_20_brms[1] %>% format(nsmall = 1), ", ", ci_20_brms[2] %>% format(nsmall = 1), "]", "\n", 
+    "Esperanza de vida promedio: ", mean_pred_20_brms %>% format(nsmall = 1), "\n", sep = "")
+```
+Vemos que los valores obtenidos mediante la implementación de `brms` coinciden con los estimados previamente.
